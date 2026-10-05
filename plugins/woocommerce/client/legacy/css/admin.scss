@@ -4357,8 +4357,51 @@ table.wc_input_table {
 
 table.wc_tax_rates {
 
+	.check-column {
+		width: 2.2em;
+		padding: 8px;
+		vertical-align: middle;
+	}
+
+	td input[type="text"]:focus-visible,
+	td input[type="number"]:focus-visible,
+	.check-column input:focus-visible {
+		outline: 2px solid $blue;
+		outline-offset: -2px;
+	}
+
 	td.country {
 		position: relative;
+	}
+}
+
+.wc-tax-bulk-actions {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	height: auto;
+}
+
+#wc-tax-bulk-editor {
+	margin-block: 16px;
+	padding: 16px;
+	border: 1px solid #c3c4c7;
+	background: #fff;
+
+	legend {
+		font-weight: 600;
+	}
+
+	.wc-tax-bulk-fields {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+		gap: 12px;
+	}
+
+	label {
+		display: grid;
+		gap: 4px;
 	}
 }
 

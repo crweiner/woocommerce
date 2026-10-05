@@ -370,6 +370,11 @@ class WC_Admin_Menus {
 	 * @return bool|int
 	 */
 	public function set_screen_option( $status, $option, $value ) {
+		if ( 'woocommerce_tax_rates_per_page' === $option ) {
+			$value = filter_var( $value, FILTER_VALIDATE_INT );
+			return false !== $value && $value >= 1 && $value <= 999 ? $value : false;
+		}
+
 		$screen_options = array(
 			'woocommerce_keys_per_page',
 			'woocommerce_webhooks_per_page',

@@ -26,9 +26,71 @@ if ( ! defined( 'ABSPATH' ) ) {
 	?>
 </h3>
 
-<table class="wc_tax_rates wc_input_table widefat">
+<div class="tablenav wc-tax-bulk-actions">
+	<label for="wc-tax-bulk-action" class="screen-reader-text"><?php esc_html_e( 'Bulk actions', 'woocommerce' ); ?></label>
+	<select id="wc-tax-bulk-action">
+		<option value=""><?php esc_html_e( 'Bulk actions', 'woocommerce' ); ?></option>
+		<option value="edit"><?php esc_html_e( 'Edit', 'woocommerce' ); ?></option>
+		<option value="remove"><?php esc_html_e( 'Remove', 'woocommerce' ); ?></option>
+	</select>
+	<button type="button" class="button" id="wc-tax-apply-bulk-action"><?php esc_html_e( 'Apply', 'woocommerce' ); ?></button>
+	<button type="button" class="button" id="wc-tax-select-all"><?php esc_html_e( 'Select all matching rates', 'woocommerce' ); ?></button>
+	<button type="button" class="button" id="wc-tax-clear-selection"><?php esc_html_e( 'Clear selection', 'woocommerce' ); ?></button>
+	<span id="wc-tax-selection-status" role="status" aria-live="polite"></span>
+</div>
+
+<fieldset id="wc-tax-bulk-editor" hidden>
+	<legend><?php esc_html_e( 'Bulk edit selected rates', 'woocommerce' ); ?></legend>
+	<p id="wc-tax-bulk-help"><?php esc_html_e( 'Leave fields blank to keep their current values. Enter * to apply to all countries, states, postcodes, or cities. Changes are applied when you save.', 'woocommerce' ); ?></p>
+	<div class="wc-tax-bulk-fields">
+		<?php
+		$bulk_fields = array(
+			'tax_rate_country'  => __( 'Country code', 'woocommerce' ),
+			'tax_rate_state'    => __( 'State code', 'woocommerce' ),
+			'postcode'          => __( 'Postcode / ZIP', 'woocommerce' ),
+			'city'              => __( 'City', 'woocommerce' ),
+			'tax_rate'          => __( 'Rate %', 'woocommerce' ),
+			'tax_rate_name'     => __( 'Tax name', 'woocommerce' ),
+			'tax_rate_priority' => __( 'Priority', 'woocommerce' ),
+		);
+		foreach ( $bulk_fields as $attribute => $label ) :
+			$input_type = in_array( $attribute, array( 'tax_rate', 'tax_rate_priority' ), true ) ? 'number' : 'text';
+			$input_step = 'tax_rate' === $attribute ? '0.0001' : '1';
+			$input_min  = 'tax_rate_priority' === $attribute ? '1' : '0';
+			$input_max  = 'tax_rate' === $attribute ? '999.9999' : '';
+			?>
+			<label>
+				<?php echo esc_html( $label ); ?>
+				<input type="<?php echo esc_attr( $input_type ); ?>" data-bulk-attribute="<?php echo esc_attr( $attribute ); ?>" aria-describedby="wc-tax-bulk-help" autocomplete="off" max="<?php echo esc_attr( $input_max ); ?>" min="<?php echo esc_attr( $input_min ); ?>" step="<?php echo esc_attr( $input_step ); ?>" />
+			</label>
+		<?php endforeach; ?>
+		<?php
+		$bulk_flags = array(
+			'tax_rate_compound' => __( 'Compound', 'woocommerce' ),
+			'tax_rate_shipping' => __( 'Shipping', 'woocommerce' ),
+		);
+		foreach ( $bulk_flags as $attribute => $label ) :
+			?>
+			<label>
+				<?php echo esc_html( $label ); ?>
+				<select data-bulk-attribute="<?php echo esc_attr( $attribute ); ?>">
+					<option value=""><?php esc_html_e( 'No change', 'woocommerce' ); ?></option>
+					<option value="1"><?php esc_html_e( 'Yes', 'woocommerce' ); ?></option>
+					<option value="0"><?php esc_html_e( 'No', 'woocommerce' ); ?></option>
+				</select>
+			</label>
+		<?php endforeach; ?>
+	</div>
+	<p>
+		<button type="button" class="button button-primary" id="wc-tax-update-selected"><?php esc_html_e( 'Update selected rates', 'woocommerce' ); ?></button>
+		<button type="button" class="button" id="wc-tax-cancel-bulk-edit"><?php esc_html_e( 'Cancel', 'woocommerce' ); ?></button>
+	</p>
+</fieldset>
+
+<table class="wc_tax_rates widefat">
 	<thead>
 		<tr>
+			<td class="check-column"><input type="checkbox" id="wc-tax-select-page" aria-label="<?php esc_attr_e( 'Select all rates on this page', 'woocommerce' ); ?>" /></td>
 			<th width="8%"><a href="https://en.wikipedia.org/wiki/ISO_3166-1#Current_codes" target="_blank"><?php _e( 'Country&nbsp;code', 'woocommerce' ); ?></a>&nbsp;<?php echo wc_help_tip( __( 'A 2 digit country code, e.g. US. Leave blank to apply to all.', 'woocommerce' ) ); ?></th>
 			<th width="8%"><?php _e( 'State code', 'woocommerce' ); ?>&nbsp;<?php echo wc_help_tip( __( 'A 2 digit state code, e.g. AL. Leave blank to apply to all.', 'woocommerce' ) ); ?></th>
 			<th><?php _e( 'Postcode / ZIP', 'woocommerce' ); ?>&nbsp;<?php echo wc_help_tip( __( 'Postcode for this rule. Semi-colon (;) separate multiple values. Leave blank to apply to all areas. Wildcards (*) and ranges for numeric postcodes (e.g. 12345...12350) can also be used.', 'woocommerce' ) ); ?></th>
@@ -42,7 +104,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	</thead>
 	<tfoot>
 		<tr>
-			<th colspan="9">
+			<th colspan="10">
 				<a href="#" class="button plus insert"><?php _e( 'Insert row', 'woocommerce' ); ?></a>
 				<a href="#" class="button minus remove_tax_rates"><?php _e( 'Remove selected row(s)', 'woocommerce' ); ?></a>
 				<a href="#" download="tax_rates.csv" class="button export"><?php _e( 'Export CSV', 'woocommerce' ); ?></a>
@@ -52,7 +114,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	</tfoot>
 	<tbody id="rates">
 		<tr>
-			<th colspan="9" style="text-align: center;"><?php esc_html_e( 'Loading&hellip;', 'woocommerce' ); ?></th>
+			<th colspan="10" style="text-align: center;"><?php esc_html_e( 'Loading&hellip;', 'woocommerce' ); ?></th>
 		</tr>
 	</tbody>
 </table>
@@ -61,12 +123,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 <script type="text/html" id="tmpl-wc-tax-table-row">
 	<tr class="tips" data-tip="<?php printf( esc_attr__( 'Tax rate ID: %s', 'woocommerce' ), '{{ data.tax_rate_id }}' ); ?>" data-id="{{ data.tax_rate_id }}">
+		<th scope="row" class="check-column">
+			<input type="checkbox" class="wc-tax-select-rate" aria-label="<?php /* translators: %s: tax rate ID. */ printf( esc_attr__( 'Select tax rate %s', 'woocommerce' ), '{{ data.tax_rate_id }}' ); ?>" />
+		</th>
 		<td class="country">
-			<input type="text" value="{{ data.tax_rate_country }}" placeholder="*" name="tax_rate_country[{{ data.tax_rate_id }}]" class="wc_input_country_iso" data-attribute="tax_rate_country" style="text-transform:uppercase" />
+			<input autocomplete="off" type="text" value="{{ data.tax_rate_country }}" placeholder="*" name="tax_rate_country[{{ data.tax_rate_id }}]" class="wc_input_country_iso" data-attribute="tax_rate_country" style="text-transform:uppercase" />
 		</td>
 
 		<td class="state">
-			<input type="text" value="{{ data.tax_rate_state }}" placeholder="*" name="tax_rate_state[{{ data.tax_rate_id }}]" data-attribute="tax_rate_state" />
+			<input autocomplete="off" type="text" value="{{ data.tax_rate_state }}" placeholder="*" name="tax_rate_state[{{ data.tax_rate_id }}]" data-attribute="tax_rate_state" />
 		</td>
 
 		<td class="postcode">
@@ -78,11 +143,11 @@ if ( ! defined( 'ABSPATH' ) ) {
 		</td>
 
 		<td class="rate">
-			<input type="text" value="{{ data.tax_rate }}" placeholder="0" name="tax_rate[{{ data.tax_rate_id }}]" data-attribute="tax_rate" />
+			<input autocomplete="off" type="text" value="{{ data.tax_rate }}" placeholder="0" name="tax_rate[{{ data.tax_rate_id }}]" data-attribute="tax_rate" />
 		</td>
 
 		<td class="name">
-			<input type="text" value="{{ data.tax_rate_name }}" name="tax_rate_name[{{ data.tax_rate_id }}]" data-attribute="tax_rate_name" />
+			<input autocomplete="off" type="text" value="{{ data.tax_rate_name }}" name="tax_rate_name[{{ data.tax_rate_id }}]" data-attribute="tax_rate_name" />
 		</td>
 
 		<td class="priority">
@@ -101,7 +166,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 <script type="text/html" id="tmpl-wc-tax-table-row-empty">
 	<tr>
-		<th colspan="9" style="text-align:center"><?php esc_html_e( 'No matching tax rates found.', 'woocommerce' ); ?></th>
+		<th colspan="10" style="text-align:center"><?php esc_html_e( 'No matching tax rates found.', 'woocommerce' ); ?></th>
 	</tr>
 </script>
 

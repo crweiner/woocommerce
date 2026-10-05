@@ -4105,12 +4105,6 @@ parameters:
 			path: includes/admin/importers/class-wc-tax-rate-importer.php
 
 		-
-			message: '#^Cannot use array destructuring on list\<string\|null\>\|null\.$#'
-			identifier: offsetAccess.nonArray
-			count: 1
-			path: includes/admin/importers/class-wc-tax-rate-importer.php
-
-		-
 			message: '#^Method WC_Tax_Rate_Importer\:\:dispatch\(\) has no return type specified\.$#'
 			identifier: missingType.return
 			count: 1
@@ -4147,12 +4141,6 @@ parameters:
 			path: includes/admin/importers/class-wc-tax-rate-importer.php
 
 		-
-			message: '#^Method WC_Tax_Rate_Importer\:\:import_error\(\) has no return type specified\.$#'
-			identifier: missingType.return
-			count: 1
-			path: includes/admin/importers/class-wc-tax-rate-importer.php
-
-		-
 			message: '#^Method WC_Tax_Rate_Importer\:\:import_start\(\) has no return type specified\.$#'
 			identifier: missingType.return
 			count: 1
@@ -4178,24 +4166,6 @@ parameters:
 
 		-
 			message: '#^Parameter \#1 \$text of function esc_attr expects string, string\|false given\.$#'
-			identifier: argument.type
-			count: 1
-			path: includes/admin/importers/class-wc-tax-rate-importer.php
-
-		-
-			message: '#^Parameter \#1 \$var of function wc_clean expects array\|string, string\|null given\.$#'
-			identifier: argument.type
-			count: 2
-			path: includes/admin/importers/class-wc-tax-rate-importer.php
-
-		-
-			message: '#^Parameter \#2 \$cities of static method WC_Tax\:\:_update_tax_rate_cities\(\) expects string, array\|string given\.$#'
-			identifier: argument.type
-			count: 1
-			path: includes/admin/importers/class-wc-tax-rate-importer.php
-
-		-
-			message: '#^Parameter \#2 \$postcodes of static method WC_Tax\:\:_update_tax_rate_postcodes\(\) expects string, array\|string given\.$#'
 			identifier: argument.type
 			count: 1
 			path: includes/admin/importers/class-wc-tax-rate-importer.php

@@ -122,7 +122,7 @@
 					return rates;
 				},
 				block: function() {
-					$( '.wc_tax_rates' ).block({
+					$( '#mainform' ).block({
 						message: null,
 						overlayCSS: {
 							background: '#fff',
@@ -134,7 +134,7 @@
 					}
 				},
 				unblock: function() {
-					$( '.wc_tax_rates' ).unblock();
+					$( '#mainform' ).unblock();
 					$submit.removeClass( 'is-busy' );
 				},
 				save: function() {
@@ -149,7 +149,7 @@
 						data: {
 							current_class: data.current_class,
 							wc_tax_nonce: data.wc_tax_nonce,
-							changes: self.changes
+							changes_json: JSON.stringify( self.changes )
 						},
 						success: function( response, textStatus ) {
 							if ( 'success' === textStatus && response.success ) {
@@ -160,10 +160,17 @@
 								WCTaxTableModelInstance.trigger( 'saved:rates' );
 
 								// Reload view.
+								WCTaxTableInstance.selectedRates.clear();
 								WCTaxTableInstance.render();
+							} else {
+								window.alert( data.strings.save_error );
 							}
 
 							self.unblock();
+						},
+						error: function() {
+							self.unblock();
+							window.alert( data.strings.save_error );
 						}
 					});
 				}
@@ -173,6 +180,7 @@
 				per_page: data.limit,
 				page: data.page,
 				initialize: function() {
+					this.selectedRates = new Set();
 					var qty_pages = Math.ceil( _.toArray( this.model.get( 'rates' ) ).length / this.per_page );
 
 					this.qty_pages = 0 === qty_pages ? 1 : qty_pages;
@@ -192,8 +200,121 @@
 					$table.find( '.insert' ).on( 'click', { view: this }, this.onAddNewRow );
 					$table.find( '.remove_tax_rates' ).on( 'click', { view: this }, this.onDeleteRow );
 					$table.find( '.export' ).on( 'click', { view: this }, this.onExport );
+					this.initializeBulkActions();
+				},
+				initializeBulkActions: function() {
+					const view = this;
+					const editor = document.getElementById( 'wc-tax-bulk-editor' );
+					this.el.addEventListener( 'change', function( event ) {
+						if ( ! event.target.matches( '.wc-tax-select-rate' ) ) {
+							return;
+						}
+						const id = event.target.closest( 'tr' ).dataset.id;
+						if ( event.target.checked ) {
+							view.selectedRates.add( id );
+						} else {
+							view.selectedRates.delete( id );
+						}
+						view.updateSelection();
+					} );
+					document.getElementById( 'wc-tax-select-page' ).addEventListener( 'change', function( event ) {
+						view.el.querySelectorAll( 'tr[data-id]' ).forEach( function( row ) {
+							if ( event.target.checked ) {
+								view.selectedRates.add( row.dataset.id );
+							} else {
+								view.selectedRates.delete( row.dataset.id );
+							}
+						} );
+						view.updateSelection();
+					} );
+					document.getElementById( 'wc-tax-select-all' ).addEventListener( 'click', function() {
+						view.model.getFilteredRates().forEach( function( rate ) {
+							view.selectedRates.add( String( rate.tax_rate_id ) );
+						} );
+						view.updateSelection();
+					} );
+					document.getElementById( 'wc-tax-clear-selection' ).addEventListener( 'click', function() {
+						view.selectedRates.clear();
+						view.updateSelection();
+					} );
+					document.getElementById( 'wc-tax-apply-bulk-action' ).addEventListener( 'click', function() {
+						const action = document.getElementById( 'wc-tax-bulk-action' ).value;
+						if ( 'remove' === action ) {
+							view.onDeleteRow( { data: { view: view }, preventDefault: function() {} } );
+						} else if ( 'edit' === action ) {
+							editor.hidden = false;
+							editor.querySelector( 'input' ).focus();
+						}
+					} );
+					document.getElementById( 'wc-tax-cancel-bulk-edit' ).addEventListener( 'click', function() {
+						view.closeBulkEditor();
+					} );
+					document.getElementById( 'wc-tax-update-selected' ).addEventListener( 'click', function() {
+						const fields = Array.from( editor.querySelectorAll( '[data-bulk-attribute]' ) );
+						if ( fields.some( function( field ) { return ! field.reportValidity(); } ) ) {
+							return;
+						}
+						const updates = {};
+						fields.forEach( function( field ) {
+							if ( '' === field.value ) {
+								return;
+							}
+							const attribute = field.dataset.bulkAttribute;
+							let value = field.value;
+							if ( 'postcode' === attribute || 'city' === attribute ) {
+								value = '*' === value ? [] : value.split( ';' ).map( function( item ) { return item.trim(); } );
+							} else if ( 'tax_rate_compound' === attribute || 'tax_rate_shipping' === attribute ) {
+								value = Number( value );
+							} else if ( '*' === value && ( 'tax_rate_country' === attribute || 'tax_rate_state' === attribute ) ) {
+								value = '';
+							}
+							updates[ attribute ] = value;
+						} );
+						const changes = {};
+						view.model.getFilteredRates().forEach( function( rate ) {
+							if ( view.selectedRates.has( String( rate.tax_rate_id ) ) && Object.keys( updates ).length ) {
+								Object.assign( rate, updates );
+								changes[ rate.tax_rate_id ] = Object.assign( {}, updates );
+							}
+						} );
+						if ( Object.keys( changes ).length ) {
+							view.model.logChanges( changes );
+							view.render();
+						}
+						view.closeBulkEditor();
+					} );
+				},
+				closeBulkEditor: function() {
+					const editor = document.getElementById( 'wc-tax-bulk-editor' );
+					editor.hidden = true;
+					editor.querySelectorAll( '[data-bulk-attribute]' ).forEach( function( field ) { field.value = ''; } );
+					document.getElementById( 'wc-tax-apply-bulk-action' ).focus();
+				},
+				updateSelection: function() {
+					const rows = Array.from( this.el.querySelectorAll( 'tr[data-id]' ) );
+					let selectedOnPage = 0;
+					rows.forEach( row => {
+						const selected = this.selectedRates.has( row.dataset.id );
+						row.querySelector( '.wc-tax-select-rate' ).checked = selected;
+						row.classList.toggle( 'current', selected );
+						selectedOnPage += selected ? 1 : 0;
+					} );
+					const selectPage = document.getElementById( 'wc-tax-select-page' );
+					selectPage.checked = rows.length > 0 && selectedOnPage === rows.length;
+					selectPage.indeterminate = selectedOnPage > 0 && selectedOnPage < rows.length;
+					selectPage.disabled = 0 === rows.length;
+					document.getElementById( 'wc-tax-selection-status' ).textContent =
+						data.strings.selected_rates.replace( '%s', this.selectedRates.size );
+					document.getElementById( 'wc-tax-apply-bulk-action' ).disabled = 0 === this.selectedRates.size;
+					document.getElementById( 'wc-tax-clear-selection' ).disabled = 0 === this.selectedRates.size;
+					document.getElementById( 'wc-tax-select-all' ).disabled = 0 === this.model.getFilteredRates().length;
+					if ( 0 === this.selectedRates.size ) {
+						document.getElementById( 'wc-tax-bulk-editor' ).hidden = true;
+					}
 				},
 				render: function() {
+					this.qty_pages = Math.max( 1, Math.ceil( this.model.getFilteredRates().length / this.per_page ) );
+					this.page = this.sanitizePage( this.page );
 					var rates       = this.model.getFilteredRates(),
 						qty_rates   = _.size( rates ),
 						qty_pages   = Math.ceil( qty_rates / this.per_page ),
@@ -210,6 +331,7 @@
 					}
 
 					// Initialize autocomplete for countries.
+					this.updateSelection();
 					this.$el.find( 'td.country input' ).autocomplete({
 						source: countryAutocompleteSource,
 						minLength: 2
@@ -318,19 +440,19 @@
 					var view    = event.data.view,
 						model   = view.model,
 						rates   = _.indexBy( model.get( 'rates' ), 'tax_rate_id' ),
-						changes = {},
-						$current, current_id;
+						changes = {};
 
 					event.preventDefault();
 
-					if ( $current = $tbody.children( '.current' ) ) {
-						$current.each(function(){
-							current_id    = $( this ).data('id');
-
-							delete rates[ current_id ];
-
-							changes[ current_id ] = _.extend( changes[ current_id ] || {}, { deleted : 'deleted' } );
-						});
+					if ( view.selectedRates.size ) {
+						view.selectedRates.forEach( function( id ) {
+							if ( ! rates[ id ] ) {
+								return;
+							}
+							delete rates[ id ];
+							changes[ id ] = { deleted: 'deleted' };
+						} );
+						view.selectedRates.clear();
 
 						model.set( 'rates', rates );
 						model.logChanges( changes );
@@ -341,6 +463,8 @@
 					}
 				},
 				onSearchField: function( event ){
+					event.data.view.selectedRates.clear();
+					event.data.view.page = 1;
 					event.data.view.updateUrl();
 					event.data.view.render();
 				},
@@ -399,6 +523,10 @@
 						attribute = $target.data( 'attribute' ),
 						val       = $target.val();
 
+					if ( ! attribute ) {
+						return;
+					}
+
 					if ( 'city' === attribute || 'postcode' === attribute ) {
 						val = val.split( ';' );
 						val = $.map( val, function( thing ) {
@@ -418,6 +546,9 @@
 				},
 				sanitizePage: function( page_num ) {
 					page_num = parseInt( page_num, 10 );
+					if ( isNaN( page_num ) ) {
+						return 1;
+					}
 					if ( page_num < 1 ) {
 						page_num = 1;
 					} else if ( page_num > this.qty_pages ) {

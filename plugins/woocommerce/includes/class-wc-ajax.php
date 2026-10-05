@@ -3769,7 +3769,7 @@ class WC_AJAX {
 	 */
 	public static function tax_rates_save_changes() {
 		// phpcs:disable WordPress.Security.NonceVerification.Missing
-		if ( ! isset( $_POST['wc_tax_nonce'], $_POST['changes'] ) ) {
+		if ( ! isset( $_POST['wc_tax_nonce'] ) || ( ! isset( $_POST['changes'] ) && ! isset( $_POST['changes_json'] ) ) ) {
 			wp_send_json_error( 'missing_fields' );
 			wp_die();
 		}
@@ -3789,7 +3789,31 @@ class WC_AJAX {
 			wp_die();
 		}
 
-		$changes = wp_unslash( $_POST['changes'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		if ( isset( $_POST['changes_json'] ) ) {
+			// JSON keeps bulk edits from being truncated by PHP's max_input_vars setting.
+			$changes = is_string( $_POST['changes_json'] ) ? json_decode( wp_unslash( $_POST['changes_json'] ), true ) : null; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Each rate is validated below and sanitized by WC_Tax.
+		} else {
+			$changes = wp_unslash( $_POST['changes'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		}
+
+		if ( ! is_array( $changes ) ) {
+			wp_send_json_error( 'invalid_changes' );
+		}
+
+		foreach ( $changes as $data ) {
+			if ( ! is_array( $data ) || array_filter( $data, 'is_object' ) ) {
+				wp_send_json_error( 'invalid_changes' );
+			}
+			foreach ( $data as $key => $value ) {
+				if ( in_array( $key, array( 'postcode', 'city' ), true ) ) {
+					if ( ! is_array( $value ) || count( array_filter( $value, 'is_scalar' ) ) !== count( $value ) ) {
+						wp_send_json_error( 'invalid_changes' );
+					}
+				} elseif ( ! is_scalar( $value ) ) {
+					wp_send_json_error( 'invalid_changes' );
+				}
+			}
+		}
 		foreach ( $changes as $tax_rate_id => $data ) {
 			if ( isset( $data['deleted'] ) ) {
 				if ( isset( $data['newRow'] ) ) {

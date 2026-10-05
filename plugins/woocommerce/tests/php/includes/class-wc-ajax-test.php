@@ -2873,6 +2873,183 @@ class WC_AJAX_Test extends \WP_Ajax_UnitTestCase {
 	}
 
 	/**
+	 * @testdox Should save a JSON tax batch larger than the default PHP input-variable limit without dropping rows.
+	 */
+	public function test_tax_rates_save_changes_saves_large_json_batch(): void {
+		$this->_setRole( 'administrator' );
+		$changes = array();
+		for ( $index = 0; $index < 1100; ++$index ) {
+			$changes[ 'new-' . $index ] = array(
+				'newRow'           => true,
+				'tax_rate_country' => 'US',
+				'tax_rate'         => '7.25',
+				'tax_rate_name'    => 'JSON batch ' . $index,
+				'postcode'         => array( '00123' ),
+			);
+		}
+		$_POST = array(
+			'wc_tax_nonce' => wp_create_nonce( 'wc_tax_nonce-class:' ),
+			'changes_json' => wp_slash( wp_json_encode( $changes ) ),
+		);
+
+		$response = $this->do_ajax( 'woocommerce_tax_rates_save_changes' );
+
+		$this->assertTrue( $response['success'], 'The complete JSON batch should be accepted.' );
+		$this->assertCount( 1100, $response['data']['rates'], 'Every submitted rate must survive the JSON transport.' );
+		$names = array_column( $response['data']['rates'], 'tax_rate_name' );
+		$this->assertContains( 'JSON batch 0', $names, 'The first submitted rate should be saved.' );
+		$this->assertContains( 'JSON batch 1099', $names, 'The last submitted rate should be saved.' );
+		foreach ( $response['data']['rates'] as $rate ) {
+			$this->assertSame( '7.2500', $rate['tax_rate'], 'All batch rates should retain their requested value.' );
+			$this->assertSame( array( '00123' ), $rate['postcode'], 'ZIP leading zeros must be preserved.' );
+		}
+	}
+
+	/**
+	 * @testdox Should reject malformed JSON and non-array tax batches without changing an existing rate.
+	 * @testWith ["{"]
+	 *           ["null"]
+	 *           ["false"]
+	 *           ["7"]
+	 *           ["\"not a batch\""]
+	 *           [["not a JSON string"]]
+	 *           [17]
+	 *
+	 * @param mixed $payload Invalid JSON batch.
+	 */
+	public function test_tax_rates_save_changes_rejects_invalid_json_batch( $payload ): void {
+		$this->_setRole( 'administrator' );
+		$rate_id = $this->create_tax_save_fixture();
+		$_POST   = array(
+			'wc_tax_nonce' => wp_create_nonce( 'wc_tax_nonce-class:' ),
+			'changes_json' => wp_slash( $payload ),
+			'changes'      => array( $rate_id => array( 'tax_rate' => '99' ) ),
+		);
+
+		$response = $this->do_ajax( 'woocommerce_tax_rates_save_changes' );
+
+		$this->assertFalse( $response['success'], 'Invalid JSON must not fall back to another batch.' );
+		$this->assertSame( 'invalid_changes', $response['data'], 'Malformed tax changes should report a validation error.' );
+		$this->assertSame( '6.0000', WC_Tax::_get_tax_rate( $rate_id )['tax_rate'], 'Rejected batches must preserve existing rates.' );
+	}
+
+	/**
+	 * @testdox Should validate every tax row before applying any JSON batch changes.
+	 * @testWith [false]
+	 *           ["not a row"]
+	 *           [{"postcode": "15222"}]
+	 *           [{"postcode": [["15222"]]}]
+	 *           [{"city": [null]}]
+	 *           [{"city": [{"value": "Pittsburgh"}]}]
+	 *           [{"tax_rate": ["7"]}]
+	 *           [{"deleted": null}]
+	 *
+	 * @param mixed $invalid_row Invalid tax changes following a valid row.
+	 */
+	public function test_tax_rates_save_changes_rejects_invalid_rows_before_mutation( $invalid_row ): void {
+		$this->_setRole( 'administrator' );
+		$rate_id = $this->create_tax_save_fixture();
+		$_POST   = array(
+			'wc_tax_nonce' => wp_create_nonce( 'wc_tax_nonce-class:' ),
+			'changes_json' => wp_slash(
+				wp_json_encode(
+					array(
+						$rate_id  => array(
+							'tax_rate' => '99',
+							'postcode' => array( '00123' ),
+						),
+						'bad-row' => $invalid_row,
+					)
+				)
+			),
+		);
+
+		$response = $this->do_ajax( 'woocommerce_tax_rates_save_changes' );
+
+		$this->assertFalse( $response['success'], 'A batch containing an invalid row must fail.' );
+		$this->assertSame( 'invalid_changes', $response['data'], 'Invalid row shapes should report a validation error.' );
+		$this->assertSame( '6.0000', WC_Tax::_get_tax_rate( $rate_id )['tax_rate'], 'Earlier valid changes must not be applied before later rows are validated.' );
+		$rates = WC_Tax::get_rates_for_tax_class( '' );
+		$this->assertSame( array( '15222' ), $rates[ $rate_id ]->postcode, 'Rejected batches must preserve existing postcode restrictions.' );
+	}
+
+	/**
+	 * @testdox Should retain nonce and capability checks for JSON tax changes.
+	 * @testWith ["administrator", false, "bad_nonce"]
+	 *           ["subscriber", true, "missing_capabilities"]
+	 *
+	 * @param string $role User role submitting the changes.
+	 * @param bool   $valid_nonce Whether to submit the user's valid nonce.
+	 * @param string $error Expected authorization error.
+	 */
+	public function test_tax_rates_save_changes_rejects_unauthorized_json( string $role, bool $valid_nonce, string $error ): void {
+		$this->_setRole( $role );
+		$rate_id = $this->create_tax_save_fixture();
+		$_POST   = array(
+			'wc_tax_nonce' => $valid_nonce ? wp_create_nonce( 'wc_tax_nonce-class:' ) : 'invalid-nonce',
+			'changes_json' => wp_slash( wp_json_encode( array( $rate_id => array( 'deleted' => true ) ) ) ),
+		);
+
+		$response = $this->do_ajax( 'woocommerce_tax_rates_save_changes' );
+
+		$this->assertFalse( $response['success'], 'Unauthorized JSON changes must fail.' );
+		$this->assertSame( $error, $response['data'], 'The existing authorization failure should remain unchanged.' );
+		$this->assertSame( '6.0000', WC_Tax::_get_tax_rate( $rate_id )['tax_rate'], 'Authorization failures must not delete tax rates.' );
+	}
+
+	/**
+	 * @testdox Should continue accepting the legacy tax changes array and preserve quoted names.
+	 */
+	public function test_tax_rates_save_changes_supports_legacy_array(): void {
+		$this->_setRole( 'administrator' );
+		$rate_id = $this->create_tax_save_fixture();
+		$_POST   = wp_slash(
+			array(
+				'wc_tax_nonce' => wp_create_nonce( 'wc_tax_nonce-class:' ),
+				'changes'      => array(
+					$rate_id => array(
+						'tax_rate'      => '7.25',
+						'tax_rate_name' => "Merchant's tax",
+						'postcode'      => array( '00123', '152*' ),
+					),
+				),
+			)
+		);
+
+		$response = $this->do_ajax( 'woocommerce_tax_rates_save_changes' );
+		$rate     = WC_Tax::_get_tax_rate( $rate_id );
+
+		$this->assertTrue( $response['success'], 'Legacy array submissions should remain supported.' );
+		$this->assertSame( '7.2500', $rate['tax_rate'], 'Legacy changes should update the selected rate.' );
+		$this->assertSame( "Merchant's tax", $rate['tax_rate_name'], 'Request unslashing should preserve quoted names.' );
+		$this->assertSame( array( '00123', '152*' ), $response['data']['rates'][ $rate_id ]['postcode'], 'Legacy postcode changes should retain leading zeros and wildcards.' );
+	}
+
+	/**
+	 * Create an existing rate for tax-save regression tests.
+	 *
+	 * @return int
+	 */
+	private function create_tax_save_fixture(): int {
+		$rate_id = WC_Tax::_insert_tax_rate(
+			array(
+				'tax_rate_country'  => 'US',
+				'tax_rate_state'    => 'PA',
+				'tax_rate'          => '6',
+				'tax_rate_name'     => 'Original tax',
+				'tax_rate_priority' => 1,
+				'tax_rate_compound' => 0,
+				'tax_rate_shipping' => 1,
+				'tax_rate_order'    => 0,
+				'tax_rate_class'    => '',
+			)
+		);
+		WC_Tax::_update_tax_rate_postcodes( $rate_id, '15222' );
+
+		return $rate_id;
+	}
+
+	/**
 	 * Does the 'hard work' of triggering an ajax endpoint and capturing the response.
 	 *
 	 * @param string $ajax_action The action to be triggered.

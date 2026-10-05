@@ -58,6 +58,14 @@ class WC_Tax_Rate_Importer extends WP_Importer {
 	public $import_error_message;
 
 	/**
+	 * Whether matching tax rates should be updated instead of added.
+	 *
+	 * @since 11.3.0
+	 * @var bool
+	 */
+	public $update_existing = false;
+
+	/**
 	 * Constructor.
 	 */
 	public function __construct() {
@@ -84,6 +92,10 @@ class WC_Tax_Rate_Importer extends WP_Importer {
 
 			case 1:
 				check_admin_referer( 'import-upload' );
+				if ( ! current_user_can( 'manage_woocommerce' ) ) {
+					wp_die( esc_html__( 'You do not have permission to manage tax rates.', 'woocommerce' ) );
+				}
+				$this->update_existing = '1' === wc_clean( wp_unslash( $_POST['update_existing'] ?? '' ) );
 
 				if ( $this->handle_upload() ) {
 
@@ -140,20 +152,32 @@ class WC_Tax_Rate_Importer extends WP_Importer {
 
 		$this->import_start();
 
-		$loop   = 0;
-		$handle = fopen( $file, 'r' );
+		$loop           = 0;
+		$imported       = 0;
+		$updated        = 0;
+		$skipped        = 0;
+		$existing_rates = $this->update_existing ? $this->get_existing_tax_rates() : array();
+		$tax_classes    = $this->update_existing ? array_merge( array( '', 'standard' ), WC_Tax::get_tax_class_slugs() ) : array();
+		$handle         = fopen( $file, 'r' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- Stream CSV rows without loading the entire import into memory.
 
 		if ( false !== $handle ) {
 
-			$header = fgetcsv( $handle, 0, $this->delimiter );
+			$header = fgetcsv( $handle, 0, $this->delimiter, '"', '\\' );
 			$count  = is_countable( $header ) ? count( $header ) : 0;
 			if ( 10 === $count ) {
 
-				$row = fgetcsv( $handle, 0, $this->delimiter );
+				$row = fgetcsv( $handle, 0, $this->delimiter, '"', '\\' );
 
 				while ( false !== $row ) {
+					if ( ! is_array( $row ) || 10 !== count( $row ) ) {
+						++$skipped;
+						$row = fgetcsv( $handle, 0, $this->delimiter, '"', '\\' );
+						continue;
+					}
 
-					list( $country, $state, $postcode, $city, $rate, $name, $priority, $compound, $shipping, $class ) = $row;
+					list( $country, $state, $postcode, $city, $rate, $name, $priority, $compound, $shipping, $class ) = array_map( 'strval', $row );
+					$postcode = sanitize_text_field( $postcode );
+					$city     = sanitize_text_field( $city );
 
 					$tax_rate = array(
 						'tax_rate_country'  => $country,
@@ -163,15 +187,44 @@ class WC_Tax_Rate_Importer extends WP_Importer {
 						'tax_rate_priority' => $priority,
 						'tax_rate_compound' => $compound ? 1 : 0,
 						'tax_rate_shipping' => $shipping ? 1 : 0,
-						'tax_rate_order'    => $loop ++,
+						'tax_rate_order'    => $loop++,
 						'tax_rate_class'    => $class,
 					);
+					if ( $this->update_existing && ! self::is_valid_tax_rate( $tax_rate, $tax_classes ) ) {
+						++$skipped;
+						$row = fgetcsv( $handle, 0, $this->delimiter, '"', '\\' );
+						continue;
+					}
 
-					$tax_rate_id = WC_Tax::_insert_tax_rate( $tax_rate );
-					WC_Tax::_update_tax_rate_postcodes( $tax_rate_id, wc_clean( $postcode ) );
-					WC_Tax::_update_tax_rate_cities( $tax_rate_id, wc_clean( $city ) );
+					$key   = $this->update_existing ? self::get_tax_rate_key( $tax_rate, explode( ';', $postcode ), explode( ';', $city ) ) : '';
+					$match = $existing_rates[ $key ] ?? null;
+					if ( $this->update_existing && false === $match ) {
+						++$skipped;
+						$row = fgetcsv( $handle, 0, $this->delimiter, '"', '\\' );
+						continue;
+					}
 
-					$row = fgetcsv( $handle, 0, $this->delimiter );
+					if ( $this->update_existing && is_int( $match ) ) {
+						$tax_rate_id = $match;
+						unset( $tax_rate['tax_rate_order'] );
+						WC_Tax::_update_tax_rate( $tax_rate_id, $tax_rate );
+						++$updated;
+					} else {
+						$tax_rate_id = WC_Tax::_insert_tax_rate( $tax_rate );
+						if ( ! $tax_rate_id ) {
+							++$skipped;
+							$row = fgetcsv( $handle, 0, $this->delimiter, '"', '\\' );
+							continue;
+						}
+						++$imported;
+						if ( $this->update_existing ) {
+							$existing_rates[ $key ] = $tax_rate_id;
+						}
+						WC_Tax::_update_tax_rate_postcodes( $tax_rate_id, $postcode );
+						WC_Tax::_update_tax_rate_cities( $tax_rate_id, $city );
+					}
+
+					$row = fgetcsv( $handle, 0, $this->delimiter, '"', '\\' );
 				}
 			} else {
 				$this->import_error( __( 'The CSV is invalid.', 'woocommerce' ) );
@@ -182,14 +235,121 @@ class WC_Tax_Rate_Importer extends WP_Importer {
 
 		// Show Result.
 		echo '<div class="updated settings-error"><p>';
-		printf(
-			/* translators: %s: tax rates count */
-			esc_html__( 'Import complete - imported %s tax rates.', 'woocommerce' ),
-			'<strong>' . absint( $loop ) . '</strong>'
-		);
+		if ( $this->update_existing ) {
+			printf(
+				/* translators: 1: Imported tax rates count, 2: Updated tax rates count. */
+				esc_html__( 'Import complete - imported %1$s and updated %2$s tax rates.', 'woocommerce' ),
+				'<strong>' . absint( $imported ) . '</strong>',
+				'<strong>' . absint( $updated ) . '</strong>'
+			);
+		} else {
+			printf(
+				/* translators: %s: tax rates count */
+				esc_html__( 'Import complete - imported %s tax rates.', 'woocommerce' ),
+				'<strong>' . absint( $imported ) . '</strong>'
+			);
+		}
 		echo '</p></div>';
+		if ( $skipped ) {
+			echo '<div class="notice notice-warning"><p>';
+			printf(
+				/* translators: %s: Skipped CSV rows count. */
+				esc_html__( 'Skipped %s rows because they are invalid, could not be saved, or match multiple existing tax rates. Review these rows before importing again.', 'woocommerce' ),
+				'<strong>' . absint( $skipped ) . '</strong>'
+			);
+			echo '</p></div>';
+		}
 
 		$this->import_end();
+	}
+
+	/**
+	 * Index existing rates by their location, priority, and class.
+	 *
+	 * @return array<string, int|false> Matching IDs, or false for ambiguous matches.
+	 */
+	private function get_existing_tax_rates(): array {
+		global $wpdb;
+
+		$rates     = $wpdb->get_results( "SELECT tax_rate_id, tax_rate_country, tax_rate_state, tax_rate_priority, tax_rate_class FROM {$wpdb->prefix}woocommerce_tax_rates", ARRAY_A );
+		$locations = $wpdb->get_results( "SELECT tax_rate_id, location_type, location_code FROM {$wpdb->prefix}woocommerce_tax_rate_locations", ARRAY_A );
+		$by_id     = array();
+		$matches   = array();
+		if ( null === $rates || null === $locations ) {
+			$this->import_error( __( 'Unable to read existing tax rates. Please try again.', 'woocommerce' ) );
+		}
+
+		foreach ( $locations as $location ) {
+			$by_id[ $location['tax_rate_id'] ][ $location['location_type'] ][] = $location['location_code'];
+		}
+		foreach ( $rates as $rate ) {
+			$rate_locations  = $by_id[ $rate['tax_rate_id'] ] ?? array();
+			$key             = self::get_tax_rate_key( $rate, $rate_locations['postcode'] ?? array(), $rate_locations['city'] ?? array() );
+			$matches[ $key ] = array_key_exists( $key, $matches ) ? false : (int) $rate['tax_rate_id'];
+		}
+
+		return $matches;
+	}
+
+	/**
+	 * Build an exact match key using the same normalization as WC_Tax writes.
+	 *
+	 * @param array $rate Tax rate data.
+	 * @param array $postcodes Postcode restrictions.
+	 * @param array $cities City restrictions.
+	 * @return string
+	 */
+	private static function get_tax_rate_key( array $rate, array $postcodes, array $cities ): string {
+		$country = strtoupper( $rate['tax_rate_country'] );
+		$state   = strtoupper( sanitize_key( $rate['tax_rate_state'] ) );
+
+		return (string) wp_json_encode(
+			array(
+				'*' === $country ? '' : $country,
+				'*' === $state ? '' : $state,
+				absint( $rate['tax_rate_priority'] ),
+				WC_Tax::format_tax_rate_class( $rate['tax_rate_class'] ),
+				self::normalize_locations( $postcodes, true ),
+				self::normalize_locations( $cities, false ),
+			)
+		);
+	}
+
+	/**
+	 * Normalize location sets without expanding wildcards or postcode ranges.
+	 *
+	 * @param array $locations Location restrictions.
+	 * @param bool  $postcodes Whether these are postcode restrictions.
+	 * @return array
+	 */
+	private static function normalize_locations( array $locations, bool $postcodes ): array {
+		foreach ( $locations as $key => $location ) {
+			if ( $postcodes ) {
+				$location = str_replace( chr( 226 ) . chr( 128 ) . chr( 166 ), '...', $location );
+			}
+			$locations[ $key ] = strtoupper( trim( $location ) );
+		}
+		$locations = array_values( array_unique( array_diff( array_filter( $locations ), array( '*' ) ) ) );
+		sort( $locations, SORT_STRING );
+
+		return $locations;
+	}
+
+	/**
+	 * Reject CSV values that could unintentionally zero rates or change their class.
+	 * Rates must fit the eight-character database column after rounding.
+	 *
+	 * @param array $rate Tax rate data.
+	 * @param array $tax_classes Allowed tax class slugs.
+	 * @return bool
+	 */
+	private static function is_valid_tax_rate( array $rate, array $tax_classes ): bool {
+		return is_numeric( $rate['tax_rate'] )
+			&& is_finite( (float) $rate['tax_rate'] )
+			&& (float) $rate['tax_rate'] >= 0
+			&& strlen( number_format( (float) $rate['tax_rate'], 4, '.', '' ) ) <= 8
+			&& ctype_digit( $rate['tax_rate_priority'] )
+			&& in_array( sanitize_title( $rate['tax_rate_class'] ), $tax_classes, true );
 	}
 
 	/**
@@ -328,6 +488,13 @@ class WC_Tax_Rate_Importer extends WP_Importer {
 							<th><label><?php esc_html_e( 'Delimiter', 'woocommerce' ); ?></label><br/></th>
 							<td><input type="text" name="delimiter" placeholder="," size="2" /></td>
 						</tr>
+						<tr>
+							<th><label for="update_existing"><?php esc_html_e( 'Update existing tax rates', 'woocommerce' ); ?></label></th>
+							<td>
+								<input type="checkbox" name="update_existing" id="update_existing" value="1" aria-describedby="update-existing-description" />
+								<p class="description" id="update-existing-description"><?php esc_html_e( 'Update rates with the same country, state, ZIP/postcodes, cities, priority, and tax class. Rates that do not match will be added. Rows matching multiple rates will be skipped.', 'woocommerce' ); ?></p>
+							</td>
+						</tr>
 					</tbody>
 				</table>
 				<p class="submit">
@@ -344,6 +511,7 @@ class WC_Tax_Rate_Importer extends WP_Importer {
 	 * Show import error and quit.
 	 *
 	 * @param  string $message Error message.
+	 * @return never
 	 */
 	private function import_error( $message = '' ) {
 		echo '<p><strong>' . esc_html__( 'Sorry, there has been an error.', 'woocommerce' ) . '</strong><br />';

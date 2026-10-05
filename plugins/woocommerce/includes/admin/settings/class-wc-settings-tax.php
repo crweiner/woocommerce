@@ -29,6 +29,7 @@ class WC_Settings_Tax extends WC_Settings_Page {
 		add_filter( 'woocommerce_settings_tabs_array', array( $this, 'add_settings_page' ), 20 );
 		add_action( 'woocommerce_admin_field_conflict_error', array( $this, 'conflict_error' ) );
 		if ( wc_tax_enabled() ) {
+			add_action( 'woocommerce_settings_page_init', array( $this, 'handle_woocommerce_settings_page_init' ) );
 			add_action( 'woocommerce_sections_' . $this->id, array( $this, 'output_sections' ) );
 			add_action( 'woocommerce_settings_' . $this->id, array( $this, 'output' ) );
 			add_action( 'woocommerce_settings_save_' . $this->id, array( $this, 'save' ) );
@@ -42,6 +43,35 @@ class WC_Settings_Tax extends WC_Settings_Page {
 	 * @var string
 	 */
 	public $icon = 'percent';
+
+	/**
+	 * Add the per-page screen option to tax rate tables.
+	 *
+	 * @since 11.3.0
+	 * @internal
+	 *
+	 * @return void
+	 */
+	public function handle_woocommerce_settings_page_init() {
+		global $current_tab, $current_section;
+
+		if ( 'tax' !== $current_tab || ! current_user_can( 'manage_woocommerce' ) ) {
+			return;
+		}
+
+		if ( 'standard' !== $current_section && ! in_array( $current_section, array_filter( WC_Tax::get_tax_class_slugs() ), true ) ) {
+			return;
+		}
+
+		add_screen_option(
+			'per_page',
+			array(
+				'label'   => __( 'Number of tax rates per page:', 'woocommerce' ),
+				'default' => 100,
+				'option'  => 'woocommerce_tax_rates_per_page',
+			)
+		);
+	}
 
 	/**
 	 * Creates the React mount point for the embedded banner.
@@ -228,7 +258,7 @@ class WC_Settings_Tax extends WC_Settings_Page {
 				'base_url'      => $base_url,
 				'rates'         => array_values( WC_Tax::get_rates_for_tax_class( $current_class ) ),
 				'page'          => ! empty( $_GET['p'] ) ? absint( $_GET['p'] ) : 1, // phpcs:ignore WordPress.Security.NonceVerification.Recommended
-				'limit'         => 100,
+				'limit'         => $this->get_tax_rates_per_page(),
 				'countries'     => $countries,
 				'states'        => $states,
 				'default_rate'  => array(
@@ -244,6 +274,9 @@ class WC_Settings_Tax extends WC_Settings_Page {
 					'tax_rate_class'    => $current_class,
 				),
 				'strings'       => array(
+					'save_error'              => __( 'Tax rates could not be saved. Your changes are still available. Please try again.', 'woocommerce' ),
+					/* translators: %s: number of selected tax rates. */
+					'selected_rates'          => __( 'Selected tax rates: %s', 'woocommerce' ),
 					'no_rows_selected'        => __( 'No row(s) selected', 'woocommerce' ),
 					'unload_confirmation_msg' => __( 'Your changed data will be lost if you leave this page without saving.', 'woocommerce' ),
 					'csv_data_cols'           => array(
@@ -264,6 +297,16 @@ class WC_Settings_Tax extends WC_Settings_Page {
 		wp_enqueue_script( 'wc-settings-tax' );
 
 		include __DIR__ . '/views/html-settings-tax.php';
+	}
+
+	/**
+	 * Get the current user's bounded table size.
+	 *
+	 * @return int
+	 */
+	private function get_tax_rates_per_page() {
+		$value = filter_var( get_user_option( 'woocommerce_tax_rates_per_page' ), FILTER_VALIDATE_INT );
+		return false !== $value && $value >= 1 && $value <= 999 ? $value : 100;
 	}
 
 	/**
